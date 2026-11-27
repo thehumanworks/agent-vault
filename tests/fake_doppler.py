@@ -29,7 +29,7 @@ class FakeDoppler:
         self.create_overwrites = True
         """A change without originalName replaces an existing secret (the pessimistic
         reading of Doppler's docs, which do not say)."""
-        self.before_write: Optional[Callable[["FakeDoppler"], None]] = None
+        self.before_write: Optional[Callable[[FakeDoppler], None]] = None
         """Called once, just before the next write is applied: a concurrent writer."""
         self.writes = 0
         self.refused = 0
@@ -42,7 +42,7 @@ class FakeDoppler:
         host, port = self.server.server_address[:2]
         return f"http://{host}:{port}"
 
-    def start(self) -> "FakeDoppler":
+    def start(self) -> FakeDoppler:
         self.thread.start()
         return self
 
@@ -131,7 +131,9 @@ class FakeDoppler:
                             self._fail(404, "Could not find requested secret")
                             return
                         value = secrets[name]
-                        self._send(200, {"name": name, "value": {"raw": value, "computed": value, "note": ""}})
+                        self._send(
+                            200, {"name": name, "value": {"raw": value, "computed": value, "note": ""}}
+                        )
                     elif path == "/v3/configs/config/secrets/download":
                         only = [s for s in query.get("secrets", "").split(",") if s]
                         if only:
@@ -175,7 +177,11 @@ class FakeDoppler:
                             fake.refused += 1
                             self._fail(400, "The secret's value does not match originalValue")
                             return
-                        if change.get("originalName") is None and name in secrets and not fake.create_overwrites:
+                        if (
+                            change.get("originalName") is None
+                            and name in secrets
+                            and not fake.create_overwrites
+                        ):
                             fake.refused += 1
                             self._fail(400, "A secret with this name already exists")
                             return

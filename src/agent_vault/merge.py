@@ -72,7 +72,8 @@ def split(value: Dict[str, Any], fmt: Format, what: str) -> Credentials:
 def join(creds: Credentials, fmt: Format) -> Dict[str, Any]:
     if fmt.per_entry:
         return dict(creds)
-    return creds.get("", {})
+    whole: Dict[str, Any] = creds.get("", {})
+    return whole
 
 
 _ISO = re.compile(r"^([0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2})(\.[0-9]+)?Z$")
@@ -104,7 +105,7 @@ def json_equal(a: Any, b: Any) -> bool:
     if isinstance(a, dict) and isinstance(b, dict):
         return a.keys() == b.keys() and all(json_equal(a[k], b[k]) for k in a)
     if isinstance(a, list) and isinstance(b, list):
-        return len(a) == len(b) and all(json_equal(x, y) for x, y in zip(a, b))
+        return len(a) == len(b) and all(json_equal(x, y) for x, y in zip(a, b, strict=True))
     if type(a) is not type(b):
         return False
     return bool(a == b)
@@ -159,10 +160,7 @@ def newer(local: Any, remote: Any, base: Optional[str], time_key: str) -> Any:
 
 def merge(local: Credentials, remote: Credentials, base: Digests, time_key: str) -> Credentials:
     names = sorted(set(local) | set(remote))
-    return {
-        name: newer(local.get(name), remote.get(name), base.get(name), time_key)
-        for name in names
-    }
+    return {name: newer(local.get(name), remote.get(name), base.get(name), time_key) for name in names}
 
 
 def creds_equal(a: Credentials, b: Credentials) -> bool:
@@ -214,7 +212,9 @@ def pull(
     local = split(parse_object(local_text, "the local file"), fmt, "the local file")
     remote = parse_remote(remote_text, fmt, f"the {vault} secret")
     merged = merge(local, remote.creds, digests(local) if base is None else base, fmt.time_key)
-    return Pulled(join(merged, fmt), merged, not creds_equal(merged, local), remote.creds, remote.last_refreshed)
+    return Pulled(
+        join(merged, fmt), merged, not creds_equal(merged, local), remote.creds, remote.last_refreshed
+    )
 
 
 @dataclass(frozen=True)

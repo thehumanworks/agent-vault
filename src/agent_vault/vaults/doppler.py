@@ -76,7 +76,7 @@ class DopplerVault(Vault):
         self._token_looked_up = token is not None or self._token is not None
 
     @classmethod
-    def from_options(cls, options: Mapping[str, str]) -> "DopplerVault":
+    def from_options(cls, options: Mapping[str, str]) -> DopplerVault:
         unknown = sorted(set(options) - {"project", "config"})
         if unknown:
             raise ValueError(f"unknown Doppler option {unknown[0]} (project, config)")

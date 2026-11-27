@@ -9,6 +9,8 @@ between. After every step they check the invariants of ``spec/AgentVaultSync.tla
   vault or in a machine's file.
 * **NoResurrection**: a value the vault replaced never comes back to it.
 * **SafeRemoval**: a file is removed only when the vault holds what it held.
+* **NoLostLocalChange**: a sync replaces, in a file, only values the vault has had.
+* **Converged**: once all runs end without giving up, the vault holds the newest refresh.
 
 The mutation tests put back doppler-nix's behaviour (blind writes; the old base after a
 failed write) and check that the same harness finds the violations TLC finds.
@@ -21,16 +23,14 @@ from __future__ import annotations
 import json
 import os
 import random
-import sys
-import threading
-import time
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, List, Optional, Set
+from typing import Dict, Iterator, List, Optional, Set
 
 import pytest
 
-from agent_vault import localfile, merge, sync
+from agent_vault import merge
 from agent_vault.localfile import MachineState, SessionLock, ToolLock, atomic_write, read_text
 from agent_vault.merge import Format
 from agent_vault.sync import MAX_ATTEMPTS, Messages, Plan, Settings, Syncer
@@ -105,7 +105,6 @@ class Run:
     session: SessionLock
     phase: str = "start"
     snapshot: Optional[Snapshot] = None
-    before: str = ""
     plan: Optional[Plan] = None
     attempts: int = 0
     gave_up: bool = False
@@ -126,8 +125,9 @@ class World:
         return machine / "auth.json"
 
     def settings(self, machine: Path) -> Settings:
-        return Settings(name="test", secret="AUTH", file=self.file(machine), fmt=FMT,
-                        remove_on_exit=True, sync_interval=1)
+        return Settings(
+            name="test", secret="AUTH", file=self.file(machine), fmt=FMT, remove_on_exit=True, sync_interval=1
+        )
 
     # -- the programs, and hand edits in the vault -------------------------------------------
 
@@ -171,22 +171,24 @@ class World:
                     run.phase = "running"  # busy: the next tick tries again
                 return
             run.attempts = 0
-            run.phase = {"pull-begin": "pull-read", "sync-begin": "sync-read", "exit-begin": "exit-read"}[phase]
+            run.phase = {"pull-begin": "pull-read", "sync-begin": "sync-read", "exit-begin": "exit-read"}[
+                phase
+            ]
         elif phase == "pull-read":
-            run.before, run.snapshot = s.begin_pull()
-            if run.snapshot is None:
+            try:
+                run.snapshot = s.fetch()
+            except VaultError:
                 s._assume_base()
                 s.end()
                 run.phase = "running"
-            else:
-                run.phase = "pull"
+                return
+            run.phase = "pull"
         elif phase == "pull":
-            run.attempts += 1
-            if s.finish_pull(run.before, run.snapshot, last=run.attempts == sync.PULL_ATTEMPTS):
-                s.end()
-                run.phase = "running"
-            else:
-                run.phase = "pull-read"
+            assert run.snapshot is not None
+            with self.watching(run.machine):
+                s.merge_pulled(run.snapshot)
+            s.end()
+            run.phase = "running"
         elif phase in ("sync-read", "exit-read"):
             during = phase == "sync-read"
             try:
@@ -204,7 +206,8 @@ class World:
         elif phase in ("sync-merge", "exit-merge"):
             during = phase == "sync-merge"
             assert run.snapshot is not None
-            run.plan = s.reconcile(run.snapshot, write_file=during, wait=1, steal=False)
+            with self.watching(run.machine):
+                run.plan = s.reconcile(run.snapshot, write_file=during, wait=1, steal=False)
             if run.plan is None:
                 s.end()
                 run.phase = "running" if during else "release"
@@ -291,6 +294,18 @@ class World:
             if json.dumps(cred, sort_keys=True) in self.vault.overwritten.get(name, set()):
                 self.violations.append(f"NoResurrection: {name} {cred} came back")
 
+    @contextmanager
+    def watching(self, machine: Path) -> Iterator[None]:
+        """NoLostLocalChange: a sync replaces in the file only values the vault has had."""
+        before = merge.parse_object(read_text(self.file(machine)), "file").get(UNTIMED)
+        yield
+        after = merge.parse_object(read_text(self.file(machine)), "file").get(UNTIMED)
+        had = self.vault.overwritten.get(UNTIMED, set()) | {
+            json.dumps(self.vault.creds().get(UNTIMED), sort_keys=True)
+        }
+        if before is not None and before != after and json.dumps(before, sort_keys=True) not in had:
+            self.violations.append(f"NoLostLocalChange: {before} replaced by {after}")
+
     def check_removal(self, removed: str) -> None:
         file = merge.parse_object(removed, "file")
         now = self.vault.creds()
@@ -299,11 +314,20 @@ class World:
                 self.violations.append(f"SafeRemoval: {name} v{cred['v']} removed, vault has {now.get(name)}")
 
 
-def simulate(seed: int, tmp: Path, *, blind: bool = False, logouts: bool = False, steps: int = 80,
-             per_run_state: bool = False) -> List[str]:
+def simulate(
+    seed: int,
+    tmp: Path,
+    *,
+    blind: bool = False,
+    logouts: bool = False,
+    steps: int = 80,
+    per_run_state: bool = False,
+) -> List[str]:
     rng = random.Random(seed)
     initial = json.dumps({FMT.envelope: {TIMED: {"v": 1, "expires": 1}, UNTIMED: {"key": 2}}})
-    world = World(rng, MemoryVault(initial, blind=blind), [tmp / f"m{seed}a", tmp / f"m{seed}b"], logouts=logouts)
+    world = World(
+        rng, MemoryVault(initial, blind=blind), [tmp / f"m{seed}a", tmp / f"m{seed}b"], logouts=logouts
+    )
     for machine in world.machines:
         machine.mkdir()
     for i, machine in enumerate([world.machines[0], world.machines[0], world.machines[1]]):
@@ -362,14 +386,16 @@ def test_mutation_blind_writes_lose_updates(tmp_path: Path) -> None:
     assert any(v.startswith(("NoLostRefresh", "SafeRemoval", "Converged")) for v in found)
 
 
-def test_mutation_old_base_resurrects_a_replaced_value(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_mutation_old_base_resurrects_a_replaced_value(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """doppler-nix kept the old base after a failed write: some schedule writes back a
     value that the vault had already replaced."""
 
     def reference(self: Syncer, plan: Plan, vault_now: dict) -> None:
         if plan.pushed.value is not None and vault_now is plan.pushed.remote:
             return  # a failed write: keep the base
-        self.base, self.assumed = merge.digests(plan.pushed.merged), False
+        self.base = merge.digests(plan.pushed.merged)
 
     monkeypatch.setattr(Syncer, "_rebase", reference)
     found = [v for seed in range(400) for v in simulate(seed, tmp_path)]
@@ -424,8 +450,11 @@ def test_processes_two_machines_lose_no_refresh(doppler, tmp_path: Path) -> None
         runner = Avlt(home, doppler)
         for run in ("1", "2"):
             name = f"{machine}{run}"
-            processes.append(runner.popen("run", "--preset", "pi", "--sync-interval", "1", "--",
-                                          *program(REFRESHER), name, "12"))
+            processes.append(
+                runner.popen(
+                    "run", "--preset", "pi", "--sync-interval", "1", "--", *program(REFRESHER), name, "12"
+                )
+            )
     made = []
     for process in processes:
         out, err = process.communicate(timeout=120)

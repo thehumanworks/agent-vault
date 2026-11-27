@@ -239,14 +239,14 @@ def resolve_file(path: Path) -> Path:
 
 
 @dataclass
-class Plan:
+class Invocation:
     vault_kind: str
     vault_options: Dict[str, str]
     name: str
     settings: Optional[Settings]
 
 
-def plan(opts: Options) -> Plan:
+def prepare(opts: Options) -> Invocation:
     preset = PRESETS.get(opts.preset) if opts.preset else None
     if opts.preset and preset is None:
         raise UsageError(f"unknown preset {opts.preset} ({', '.join(PRESETS)})")
@@ -260,7 +260,7 @@ def plan(opts: Options) -> Plan:
     file = expand(opts.file) if opts.file else (preset.file() if preset else None)
     envelope = opts.envelope or (preset.envelope if preset else None)
     if preset is None and opts.action == "run" and not (secret or file or envelope):
-        return Plan(vault_kind, vault_options, name, None)
+        return Invocation(vault_kind, vault_options, name, None)
     for option, given in (("secret", secret), ("file", file), ("envelope", envelope)):
         if not given:
             raise UsageError(f"--{option} is required (or use --preset)")
@@ -277,7 +277,9 @@ def plan(opts: Options) -> Plan:
         fmt=Format(
             envelope=envelope,
             time_key=opts.time_key or (preset.time_key if preset else "expires"),
-            per_entry=opts.per_entry if opts.per_entry is not None else (preset.per_entry if preset else True),
+            per_entry=opts.per_entry
+            if opts.per_entry is not None
+            else (preset.per_entry if preset else True),
         ),
         lock_dir=lock_dir.absolute() if lock_dir else None,
         lock_file=lock_file.absolute() if lock_file else None,
@@ -288,7 +290,7 @@ def plan(opts: Options) -> Plan:
         ),
         sync_interval=opts.sync_interval,
     )
-    return Plan(vault_kind, vault_options, name, settings)
+    return Invocation(vault_kind, vault_options, name, settings)
 
 
 def usage() -> str:
@@ -310,23 +312,26 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         if opts.action == "version":
             print(f"avlt {__version__}")
             return 0
-        the_plan = plan(opts)
-        vault = open_vault(the_plan.vault_kind, the_plan.vault_options)
+        invocation = prepare(opts)
+        vault = open_vault(invocation.vault_kind, invocation.vault_options)
     except (UsageError, ValueError) as e:
         die(str(e))
     except OSError as e:
         die(f"cannot prepare the file: {e.strerror or e}")
     depth = _depth()
     if depth >= MAX_DEPTH:
-        die(f"nested {MAX_DEPTH} levels deep; is {opts.command[0] if opts.command else 'the command'} "
-            "a wrapper that calls avlt again?", the_plan.name)
-    say = Messages(the_plan.name)
+        die(
+            f"nested {MAX_DEPTH} levels deep; is {opts.command[0] if opts.command else 'the command'} "
+            "a wrapper that calls avlt again?",
+            invocation.name,
+        )
+    say = Messages(invocation.name)
     if opts.action == "run":
-        return run(the_plan, vault, opts, say, depth)
-    assert the_plan.settings is not None
+        return run(invocation, vault, opts, say, depth)
+    assert invocation.settings is not None
     if opts.action == "pull":
-        return pull(the_plan.settings, vault, say)
-    return push(the_plan.settings, vault, say)
+        return pull(invocation.settings, vault, say)
+    return push(invocation.settings, vault, say)
 
 
 def _depth() -> int:
@@ -336,7 +341,9 @@ def _depth() -> int:
         return 0
 
 
-def _child_env(vault: Vault, opts: Options, settings: Optional[Settings], say: Messages, depth: int) -> Dict[str, str]:
+def _child_env(
+    vault: Vault, opts: Options, settings: Optional[Settings], say: Messages, depth: int
+) -> Dict[str, str]:
     env = dict(os.environ)
     env.pop(BASE_VARIABLE, None)
     env[DEPTH_VARIABLE] = str(depth + 1)
@@ -351,13 +358,13 @@ def _child_env(vault: Vault, opts: Options, settings: Optional[Settings], say: M
     return env
 
 
-def run(the_plan: Plan, vault: Vault, opts: Options, say: Messages, depth: int) -> int:
+def run(invocation: Invocation, vault: Vault, opts: Options, say: Messages, depth: int) -> int:
     command = opts.command
     problem = vault.login_problem()
     if problem:
         say(f"{problem}; starting without {vault.label} secrets")
         return _exec(command, dict(os.environ, **{DEPTH_VARIABLE: str(depth + 1)}), say)
-    settings = the_plan.settings
+    settings = invocation.settings
     env = _child_env(vault, opts, settings, say, depth)
     if settings is None:
         return _exec(command, env, say)
@@ -415,7 +422,6 @@ def push(settings: Settings, vault: Vault, say: Messages) -> int:
         syncer.base = merge.base_of(os.environ.get(BASE_VARIABLE, ""), settings.fmt)
     except MergeError:
         syncer.base = {}
-    syncer.assumed = True
     with _exit_signals():
         syncer.finish(session)
     session.release()
@@ -435,7 +441,7 @@ def _run_child(command: Sequence[str], env: Dict[str, str], say: Messages) -> in
     """Run the command to its end, outliving the signals that end it so its credentials
     are still written back. Ctrl-C reaches the command from the terminal; SIGTERM and
     SIGHUP sent to agent-vault are passed on to it."""
-    child: Optional[subprocess.Popen] = None
+    child: Optional[subprocess.Popen[bytes]] = None
     pending: List[int] = []
 
     def forward(signum: int, _frame: object) -> None:

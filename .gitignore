@@ -10,3 +10,4 @@ build/
 spec/tools/
 spec/states/
 spec/*.toolbox/
+spec/*_TTrace_*

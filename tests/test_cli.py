@@ -50,12 +50,16 @@ def test_the_programs_exit_status(avlt: Avlt) -> None:
 def test_no_login_runs_the_program_without_secrets(avlt: Avlt, home: Path) -> None:
     out = home / "out"
     code = f"import os; open({str(out)!r}, 'w').write(os.environ.get('API_KEY', 'unset'))"
-    result = avlt("--name", "all", "run", "-p", "app", "-c", "dev", "--", *py(code), env={"DOPPLER_TOKEN": ""})
+    result = avlt(
+        "--name", "all", "run", "-p", "app", "-c", "dev", "--", *py(code), env={"DOPPLER_TOKEN": ""}
+    )
     assert out.read_text() == "unset"
     assert "all: no Doppler login; starting without app/dev secrets" in result.stderr
 
 
-def test_doppler_down_at_start_runs_the_program_without_secrets(avlt: Avlt, doppler: FakeDoppler, home: Path) -> None:
+def test_doppler_down_at_start_runs_the_program_without_secrets(
+    avlt: Avlt, doppler: FakeDoppler, home: Path
+) -> None:
     doppler.down = True
     out = home / "out"
     code = f"import os; open({str(out)!r}, 'w').write(os.environ.get('API_KEY', 'unset'))"
@@ -78,7 +82,12 @@ v = load(f); v["openai"] = {{"access": "a2", "expires": 200}}; v["anthropic"] = 
 """
     result = avlt("run", "--preset", "pi", "--", *program(body))
     assert result.returncode == 0, result.stderr
-    assert json.loads(out.read_text()) == [{"openai": {"access": "a1", "expires": 100}}, "k", "unset", "unset"]
+    assert json.loads(out.read_text()) == [
+        {"openai": {"access": "a1", "expires": 100}},
+        "k",
+        "unset",
+        "unset",
+    ]
     doc = pi_secret(doppler)
     assert doc["piAuthJson"] == {"anthropic": {"key": "sk"}, "openai": {"access": "a2", "expires": 200}}
     assert isinstance(doc["meta"]["lastRefreshed"], int)
@@ -91,21 +100,37 @@ def test_pi_harness_form(avlt: Avlt, doppler: FakeDoppler, home: Path, tmp_path:
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
     fake_pi = bin_dir / "pi"
-    fake_pi.write_text(f"#!/bin/sh\necho \"$@\" > {home}/args\n")
+    fake_pi.write_text(f'#!/bin/sh\necho "$@" > {home}/args\n')
     fake_pi.chmod(0o755)
     result = avlt("pi", "--model", "x", env={"PATH": f"{bin_dir}:{os.environ['PATH']}"})
     assert result.returncode == 0, result.stderr
     assert (home / "args").read_text() == "--model x\n"
 
 
-def test_a_later_expiry_in_doppler_replaces_the_local_one(avlt: Avlt, doppler: FakeDoppler, home: Path) -> None:
-    doppler.put("agents", "pi", {"PI_AUTH_JSON": {"piAuthJson": {
-        "openai": {"access": "a3", "expires": 300}, "anthropic": {"key": "sk"}}}})
+def test_a_later_expiry_in_doppler_replaces_the_local_one(
+    avlt: Avlt, doppler: FakeDoppler, home: Path
+) -> None:
+    doppler.put(
+        "agents",
+        "pi",
+        {
+            "PI_AUTH_JSON": {
+                "piAuthJson": {"openai": {"access": "a3", "expires": 300}, "anthropic": {"key": "sk"}}
+            }
+        },
+    )
     f = home / PI_FILE
     f.parent.mkdir(parents=True)
     f.write_text(json.dumps({"openai": {"access": "a2", "expires": 200}, "anthropic": {"key": "sk"}}))
     out = home / "out"
-    avlt("run", "--preset", "pi", "--", *program(f"open({str(out)!r}, 'w').write(load(H / {PI_FILE!r})['openai']['access'])"), check=True)
+    avlt(
+        "run",
+        "--preset",
+        "pi",
+        "--",
+        *program(f"open({str(out)!r}, 'w').write(load(H / {PI_FILE!r})['openai']['access'])"),
+        check=True,
+    )
     assert out.read_text() == "a3"
 
 
@@ -123,7 +148,11 @@ save(H / {PI_FILE!r}, {{"openai": {{"access": "a4", "expires": 400}}}})
 
 
 def test_codex(avlt: Avlt, doppler: FakeDoppler, home: Path) -> None:
-    doppler.put("agents", "codex", {"CODEX_AUTH_JSON": {"tokens": {"id": "t1"}, "last_refresh": "2026-01-01T00:00:00Z"}})
+    doppler.put(
+        "agents",
+        "codex",
+        {"CODEX_AUTH_JSON": {"tokens": {"id": "t1"}, "last_refresh": "2026-01-01T00:00:00Z"}},
+    )
     out = home / "out"
     body = f"""
 f = H / {CODEX_FILE!r}
@@ -149,14 +178,18 @@ open({str(out)!r}, "w").write(os.environ["API_KEY"] + "/" + os.environ.get("OTHE
     env = {"PATH": "/caller/bin:" + os.environ["PATH"]}
     avlt("run", *TOOL, "--only-secrets", "API_KEY", "--", *program(body), env=env, check=True)
     assert out.read_text() == "key-1/unset//caller/bin"
-    assert doppler.doc("app", "dev", "TOOL_AUTH")["toolAuth"] == {"main": {"key": "k1"}}, "a new secret is created"
+    assert doppler.doc("app", "dev", "TOOL_AUTH")["toolAuth"] == {"main": {"key": "k1"}}, (
+        "a new secret is created"
+    )
     assert compact(home / ".tool/auth.json") == {"main": {"key": "k1"}}, "~/ is the home directory; kept"
     result = avlt("run", *TOOL, "--", *py(f"open({str(out)!r}, 'w').write('ran')"), env={"DOPPLER_TOKEN": ""})
     assert out.read_text() == "ran"
     assert result.returncode == 0
 
 
-def test_the_file_is_private_and_written_at_a_symlinks_target(avlt: Avlt, doppler: FakeDoppler, home: Path) -> None:
+def test_the_file_is_private_and_written_at_a_symlinks_target(
+    avlt: Avlt, doppler: FakeDoppler, home: Path
+) -> None:
     doppler.put("app", "dev", {"TOOL_AUTH": {"toolAuth": {"main": {"key": "k1"}}}})
     real = home / "real" / "auth.json"
     real.parent.mkdir()
@@ -175,8 +208,18 @@ LIVE = ["--preset", "pi", "--sync-interval", "1"]
 
 
 def test_sync_while_the_command_runs(avlt: Avlt, doppler: FakeDoppler, home: Path) -> None:
-    doppler.put("agents", "pi", {"PI_AUTH_JSON": {"piAuthJson": {
-        "openai": {"access": "a1", "expires": 100}, "other": {"access": "o1", "expires": 100}}}})
+    doppler.put(
+        "agents",
+        "pi",
+        {
+            "PI_AUTH_JSON": {
+                "piAuthJson": {
+                    "openai": {"access": "a1", "expires": 100},
+                    "other": {"access": "o1", "expires": 100},
+                }
+            }
+        },
+    )
     out = home / "out"
     body = f"""
 f = H / {PI_FILE!r}
@@ -203,7 +246,9 @@ print("the command ends", file=sys.stderr, flush=True)
     assert "pi: wrote newer credentials back to PI_AUTH_JSON during the run" in result.stderr
 
 
-def test_a_key_changed_in_doppler_after_the_last_sync_is_not_undone_at_exit(avlt: Avlt, doppler: FakeDoppler) -> None:
+def test_a_key_changed_in_doppler_after_the_last_sync_is_not_undone_at_exit(
+    avlt: Avlt, doppler: FakeDoppler
+) -> None:
     doppler.put("agents", "pi", {"PI_AUTH_JSON": {"piAuthJson": {"anthropic": {"key": "k1"}}}})
     body = f"""
 save(H / {PI_FILE!r}, {{"anthropic": {{"key": "k2"}}}})
@@ -216,7 +261,9 @@ remote_set("agents", "pi", "PI_AUTH_JSON", doc)
 
 
 def test_doppler_unreachable_for_a_while(avlt: Avlt, doppler: FakeDoppler, home: Path) -> None:
-    doppler.put("agents", "pi", {"PI_AUTH_JSON": {"piAuthJson": {"openai": {"access": "a1", "expires": 100}}}})
+    doppler.put(
+        "agents", "pi", {"PI_AUTH_JSON": {"piAuthJson": {"openai": {"access": "a1", "expires": 100}}}}
+    )
     out = home / "out"
     body = f"""
 doppler_down(True)
@@ -237,7 +284,9 @@ def test_no_sync_outlives_the_run(avlt: Avlt) -> None:
 
 
 def test_sync_interval_zero_syncs_only_before_and_after(avlt: Avlt, doppler: FakeDoppler, home: Path) -> None:
-    doppler.put("agents", "pi", {"PI_AUTH_JSON": {"piAuthJson": {"openai": {"access": "a1", "expires": 100}}}})
+    doppler.put(
+        "agents", "pi", {"PI_AUTH_JSON": {"piAuthJson": {"openai": {"access": "a1", "expires": 100}}}}
+    )
     out = home / "out"
     body = f"""
 save(H / {PI_FILE!r}, {{"openai": {{"access": "a2", "expires": 200}}}})
@@ -251,7 +300,10 @@ open({str(out)!r}, "w").write(remote("agents", "pi", "PI_AUTH_JSON")["piAuthJson
 
 def test_a_fractional_sync_interval_is_refused(avlt: Avlt) -> None:
     result = avlt("--preset", "pi", "--sync-interval", "1.5", "run", "--", "true")
-    assert (result.returncode, result.stderr) == (2, "avlt: --sync-interval takes a whole number of seconds\n")
+    assert (result.returncode, result.stderr) == (
+        2,
+        "avlt: --sync-interval takes a whole number of seconds\n",
+    )
 
 
 # == doppler-auth-sync --pull and --push ===================================================
@@ -267,20 +319,27 @@ def test_pull_and_push(avlt: Avlt, doppler: FakeDoppler, home: Path) -> None:
 
     doppler.put("app", "dev", {"TOOL_AUTH": {"toolAuth": {"main": {"key": "k2"}}}})
     avlt(*TOOL, "push", env={"AGENT_VAULT_BASE": base}, check=True)
-    assert doppler.doc("app", "dev", "TOOL_AUTH")["toolAuth"]["main"]["key"] == "k2", "an unchanged local copy does not undo Doppler's"
+    assert doppler.doc("app", "dev", "TOOL_AUTH")["toolAuth"]["main"]["key"] == "k2", (
+        "an unchanged local copy does not undo Doppler's"
+    )
 
     f.write_text(json.dumps({"main": {"key": "k3"}}))
     avlt(*TOOL, "push", env={"AGENT_VAULT_BASE": base}, check=True)
-    assert doppler.doc("app", "dev", "TOOL_AUTH")["toolAuth"]["main"]["key"] == "k3", "a changed local copy wins"
+    assert doppler.doc("app", "dev", "TOOL_AUTH")["toolAuth"]["main"]["key"] == "k3", (
+        "a changed local copy wins"
+    )
 
     doppler.put("app", "dev", {"TOOL_AUTH": {"toolAuth": {"main": {"key": "k4"}}}})
     avlt(*TOOL, "push", check=True)
     assert doppler.doc("app", "dev", "TOOL_AUTH")["toolAuth"]["main"]["key"] == "k4", (
-        "without AGENT_VAULT_BASE, this machine's record of the last sync (k3) still says k3 is not new")
+        "without AGENT_VAULT_BASE, this machine's record of the last sync (k3) still says k3 is not new"
+    )
 
     shutil.rmtree(home / ".local/state/agent-vault")
     avlt(*TOOL, "push", "--remove-on-exit", check=True)
-    assert doppler.doc("app", "dev", "TOOL_AUTH")["toolAuth"]["main"]["key"] == "k3", "without any base the local copy wins"
+    assert doppler.doc("app", "dev", "TOOL_AUTH")["toolAuth"]["main"]["key"] == "k3", (
+        "without any base the local copy wins"
+    )
     assert compact(f) is None, "--remove-on-exit removes the file"
     assert not list((home / ".local/state/agent-vault").glob("*.base")), "and the record of its last sync"
 
@@ -300,7 +359,9 @@ def test_pull_without_a_login_does_nothing(avlt: Avlt, home: Path) -> None:
 
 
 def test_no_secret_in_any_url(avlt: Avlt, doppler: FakeDoppler, home: Path) -> None:
-    doppler.put("agents", "pi", {"PI_AUTH_JSON": {"piAuthJson": {"openai": {"access": "secret-a1", "expires": 100}}}})
+    doppler.put(
+        "agents", "pi", {"PI_AUTH_JSON": {"piAuthJson": {"openai": {"access": "secret-a1", "expires": 100}}}}
+    )
     body = f"""save(H / {PI_FILE!r}, {{"openai": {{"access": "secret-a2", "expires": 200}}}})"""
     avlt("run", *LIVE, "--", *program(body), check=True)
     avlt("run", "-p", "app", "-c", "dev", "--", "true", check=True)
@@ -310,11 +371,23 @@ def test_no_secret_in_any_url(avlt: Avlt, doppler: FakeDoppler, home: Path) -> N
     assert any(line.startswith("POST /v3/configs/config/secrets") for line in doppler.log)
 
 
-def test_the_write_is_guarded_and_a_lost_race_merges_again(avlt: Avlt, doppler: FakeDoppler, home: Path) -> None:
+def test_the_write_is_guarded_and_a_lost_race_merges_again(
+    avlt: Avlt, doppler: FakeDoppler, home: Path
+) -> None:
     """Another machine writes the secret between our read and our write: Doppler refuses
     ours, and avlt merges again on top of the other machine's copy."""
-    doppler.put("agents", "pi", {"PI_AUTH_JSON": {"piAuthJson": {
-        "openai": {"access": "a1", "expires": 100}, "google": {"access": "g1", "expires": 100}}}})
+    doppler.put(
+        "agents",
+        "pi",
+        {
+            "PI_AUTH_JSON": {
+                "piAuthJson": {
+                    "openai": {"access": "a1", "expires": 100},
+                    "google": {"access": "g1", "expires": 100},
+                }
+            }
+        },
+    )
 
     def other_machine(fake: FakeDoppler) -> None:
         doc = json.loads(fake.configs[("agents", "pi")]["PI_AUTH_JSON"])
@@ -333,7 +406,9 @@ def test_the_write_is_guarded_and_a_lost_race_merges_again(avlt: Avlt, doppler: 
     assert set(change) == {"originalName", "name", "originalValue", "value"}
 
 
-def test_sigterm_reaches_the_command_and_the_write_back_still_runs(avlt: Avlt, doppler: FakeDoppler, home: Path) -> None:
+def test_sigterm_reaches_the_command_and_the_write_back_still_runs(
+    avlt: Avlt, doppler: FakeDoppler, home: Path
+) -> None:
     ready = home / "ready"
     body = f"""
 import signal
@@ -363,5 +438,7 @@ def test_unknown_options_and_presets(avlt: Avlt) -> None:
     assert "unknown preset nope" in avlt("--preset", "nope", "run", "--", "true").stderr
     assert "--file is required" in avlt("-p", "a", "-c", "b", "-s", "S", "-e", "e", "pull").stderr
     assert "unknown vault nope" in avlt("--vault", "nope", "--preset", "pi", "pull").stderr
-    assert "--lock-dir and --lock-file exclude each other" in avlt(
-        "--preset", "pi", "--lock-dir", "a", "--lock-file", "b", "pull").stderr
+    assert (
+        "--lock-dir and --lock-file exclude each other"
+        in avlt("--preset", "pi", "--lock-dir", "a", "--lock-file", "b", "pull").stderr
+    )

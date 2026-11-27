@@ -127,7 +127,9 @@ def test_errors_do_not_quote_the_data() -> None:
 def test_whole_file_is_one_credential() -> None:
     old = {"tokens": {"id": "t1"}, "last_refresh": "2026-01-01T00:00:00Z"}
     new = {"tokens": {"id": "t2"}, "last_refresh": "2026-02-01T00:00:00.5Z"}
-    pushed = merge.push(json.dumps(new), json.dumps(old), merge.base_of(json.dumps(old), CODEX), CODEX, "Doppler")
+    pushed = merge.push(
+        json.dumps(new), json.dumps(old), merge.base_of(json.dumps(old), CODEX), CODEX, "Doppler"
+    )
     assert json.loads(pushed.value or "{}")["codexAuthJson"] == new
     assert merge.pull("{}", "", CODEX, "Doppler").file == {}
 
@@ -155,7 +157,9 @@ def test_rebase_keeps_a_logout_and_a_stale_file() -> None:
     assert "gone" in after, "still counts as removed by the command at the next try"
     assert after["kept"] == base["kept"], "k2 still has to reach the vault"
     # The write-back does not write the file: a newer copy in the vault does not move the base.
-    stale = merge.rebase(merge.digests({"main": {"key": "k1"}}), {"main": {"key": "k1"}}, {"main": {"key": "k2"}})
+    stale = merge.rebase(
+        merge.digests({"main": {"key": "k1"}}), {"main": {"key": "k1"}}, {"main": {"key": "k2"}}
+    )
     assert stale == merge.digests({"main": {"key": "k1"}})
 
 
@@ -196,7 +200,11 @@ def test_properties(seed: int) -> None:
             if lt is not None and rt is not None:
                 assert got == max(lt, rt)
             # An unchanged local copy never overrides the vault's.
-            if name in remote and local.get(name) == base_file.get(name) and (lt is None or rt is None or lt == rt):
+            if (
+                name in remote
+                and local.get(name) == base_file.get(name)
+                and (lt is None or rt is None or lt == rt)
+            ):
                 assert cred == remote[name]
         # Merging again changes nothing (idempotent), from either side.
         assert merge.merge(merged, remote, base, "expires") == merged

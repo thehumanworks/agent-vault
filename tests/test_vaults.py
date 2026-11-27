@@ -47,7 +47,9 @@ def test_write_is_guarded(doppler: FakeDoppler) -> None:
     assert doppler.bodies[-1] == {
         "project": "app",
         "config": "dev",
-        "change_requests": [{"originalName": "API_KEY", "name": "API_KEY", "value": "key-3", "originalValue": "key-2"}],
+        "change_requests": [
+            {"originalName": "API_KEY", "name": "API_KEY", "value": "key-3", "originalValue": "key-2"}
+        ],
     }
 
 
@@ -149,9 +151,7 @@ def test_a_third_party_adapter_plugs_in(tmp_path: Path, monkeypatch: pytest.Monk
     package = tmp_path / "site"
     (package / "memvault").mkdir(parents=True)
     (package / "memvault" / "__init__.py").write_text(
-        "from agent_vault.vaults.file import FileVault\n"
-        "class MemVault(FileVault):\n"
-        "    kind = 'memory'\n"
+        "from agent_vault.vaults.file import FileVault\nclass MemVault(FileVault):\n    kind = 'memory'\n"
     )
     dist = package / "memvault-1.0.dist-info"
     dist.mkdir()

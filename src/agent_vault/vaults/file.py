@@ -26,7 +26,7 @@ class FileVault(Vault):
         self.path = path
 
     @classmethod
-    def from_options(cls, options: Mapping[str, str]) -> "FileVault":
+    def from_options(cls, options: Mapping[str, str]) -> FileVault:
         unknown = sorted(set(options) - {"path"})
         if unknown:
             raise ValueError(f"unknown file vault option {unknown[0]} (path)")

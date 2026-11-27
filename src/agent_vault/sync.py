@@ -19,10 +19,10 @@ reads the secret again and merges once more, up to :data:`MAX_ATTEMPTS` times. T
 what keeps a credential rotated on one machine from being overwritten by another
 machine's older copy.
 
-An operation is made of *phases* (:meth:`Syncer.begin_pull`, :meth:`Syncer.finish_pull`,
-:meth:`Syncer.fetch`, :meth:`Syncer.reconcile`, :meth:`Syncer.publish`), which match the
-actions of the spec. The tests drive the phases of several syncers in random
-interleavings and check the spec's invariants on the result.
+An operation is made of *phases* (:meth:`Syncer.fetch`, :meth:`Syncer.merge_pulled`,
+:meth:`Syncer.reconcile`, :meth:`Syncer.publish`), which match the actions of the spec.
+The tests drive the phases of several syncers in random interleavings and check the
+spec's invariants on the result.
 """
 
 from __future__ import annotations
@@ -33,7 +33,7 @@ import threading
 import traceback
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable, List, Optional, Tuple
+from typing import Callable, List, Optional
 
 from . import merge
 from .localfile import MachineState, SessionLock, ToolLock, atomic_write, read_text, remove
@@ -42,9 +42,6 @@ from .vault import Snapshot, Vault, VaultError
 
 MAX_ATTEMPTS = 5
 """Compare-and-set attempts per operation before it gives up until the next one."""
-
-PULL_ATTEMPTS = 3
-"""Reads of the secret at the start while the file keeps changing under them."""
 
 LOCK_WAIT = 10.0
 """Seconds to wait for the tool lock before and after the command (doppler-nix: 100 tries
@@ -128,16 +125,15 @@ class Messages:
 class Syncer:
     """The sync state of one run."""
 
-    def __init__(self, settings: Settings, vault: Vault, messages: Messages,
-                 machine: Optional[MachineState] = None):
+    def __init__(
+        self, settings: Settings, vault: Vault, messages: Messages, machine: Optional[MachineState] = None
+    ):
         self.s = settings
         self.vault = vault
         self.say = messages
         self.machine = machine or MachineState(settings.file)
         self.base: Optional[Digests] = None
         """The machine's base, as loaded at the start of the current operation."""
-        self.assumed = False
-        """The base was taken from the file as it is, without a sync; it is not saved."""
         self.refreshed: object = None
         """The secret's ``meta.lastRefreshed`` as last seen."""
         self.seen: str = ""
@@ -163,12 +159,12 @@ class Syncer:
             return False
         loaded = self.machine.load_base()
         if loaded is not None:
-            self.base, self.assumed = loaded, False
+            self.base = loaded
         return True
 
     def end(self) -> None:
         """Save the base and release the mutex."""
-        if self.base is not None and not self.assumed:
+        if self.base is not None:
             self.machine.save_base(self.base)
         self.machine.release()
 
@@ -180,49 +176,34 @@ class Syncer:
                 self.base = merge.base_of(read_text(self.s.file), self.s.fmt)
             except MergeError:
                 self.base = {}
-            self.assumed = True
 
     # -- phases ---------------------------------------------------------------------
 
     def fetch(self) -> Snapshot:
         return self.vault.read(self.s.secret)
 
-    def begin_pull(self) -> Tuple[str, Optional[Snapshot]]:
-        """The file as it is now, then the secret (``None``: unreadable)."""
-        before = read_text(self.s.file)
-        try:
-            return before, self.fetch()
-        except VaultError:
-            return before, None
+    def merge_pulled(self, snapshot: Snapshot) -> None:
+        """Under the tool lock, merge ``snapshot`` into the file.
 
-    def finish_pull(self, before: str, snapshot: Optional[Snapshot], last: bool) -> bool:
-        """Under the tool lock, merge ``snapshot`` into the file. ``False``: the file
-        changed since ``before``, so fetch again.
-
-        Without a base, a pull lets the vault's copy of a credential without a later time
-        key win. That is right only if the snapshot is newer than what the file holds; a
-        file changed after the snapshot was taken may hold a newer copy, and merging the
-        snapshot over it would undo that copy.
+        With the machine's base, a credential changed in the file since the last sync is
+        kept; without one (no run on this machine has synced the file yet), the vault's
+        copy of a credential wins unless the file's has a later time, as in doppler-nix.
+        Either way the snapshot is at least as new as anything a sync put in the file,
+        since syncs on this machine hold the mutex the caller holds.
         """
         lock = self.s.tool_lock()
-        if snapshot is None or not lock.acquire(LOCK_WAIT, steal=True):
-            if snapshot is not None:
-                self.say(f"{lock.path} is held by another process; not syncing {self.s.secret}")
+        if not lock.acquire(LOCK_WAIT, steal=True):
+            self.say(f"{lock.path} is held by another process; not syncing {self.s.secret}")
             self._assume_base()
-            return True
+            return
         try:
             text = read_text(self.s.file)
-            if text != before:
-                if not last:
-                    return False
-                self._assume_base()  # it keeps changing: leave it to whoever changes it
-                return True
             try:
                 pulled = merge.pull(text, snapshot.value, self.s.fmt, self.kind, self.base)
             except MergeError as e:
                 self.say(f"{e}; left {self.s.file} as it is")
                 self._assume_base()
-                return True
+                return
             self.refreshed = pulled.last_refreshed
             self.pulled = snapshot
             file_now = pulled.merged
@@ -232,8 +213,7 @@ class Syncer:
                 except OSError:
                     self.say(f"could not write {self.s.file}")
                     file_now = merge.split(merge.parse_object(text, "the local file"), self.s.fmt, "")
-            self.base, self.assumed = merge.rebase(self.base, file_now, pulled.remote), False
-            return True
+            self.base = merge.rebase(self.base, file_now, pulled.remote)
         finally:
             lock.release()
 
@@ -305,7 +285,7 @@ class Syncer:
         return "done"
 
     def _rebase(self, plan: Plan, vault_now: Credentials) -> None:
-        self.base, self.assumed = merge.rebase(self.base, plan.file_now, vault_now), False
+        self.base = merge.rebase(self.base, plan.file_now, vault_now)
 
     def _note_refreshed(self, latest: object) -> None:
         if self.refreshed is not None and latest is not None and latest != self.refreshed:
@@ -322,13 +302,12 @@ class Syncer:
             self._assume_base()
             return "busy"
         try:
-            for attempt in range(PULL_ATTEMPTS):
-                before, snapshot = self.begin_pull()
-                if snapshot is None:
-                    self._assume_base()
-                    return "unreadable"
-                if self.finish_pull(before, snapshot, last=attempt + 1 == PULL_ATTEMPTS):
-                    break
+            try:
+                snapshot = self.fetch()
+            except VaultError:
+                self._assume_base()
+                return "unreadable"
+            self.merge_pulled(snapshot)
             return "pulled"
         finally:
             self.end()
@@ -344,7 +323,12 @@ class Syncer:
                 except VaultError:
                     self.say(f"could not read {self.s.secret} from {self.kind} during the run")
                     return
-                if attempt == 0 and now == self.seen and snapshot.value == self.seen_remote and not self.dirty:
+                if (
+                    attempt == 0
+                    and now == self.seen
+                    and snapshot.value == self.seen_remote
+                    and not self.dirty
+                ):
                     return
                 plan = self.reconcile(snapshot, write_file=True, wait=LOCK_WAIT_DURING_RUN, steal=False)
                 if plan is None or self.publish(plan, during_run=True) != "conflict":

@@ -49,7 +49,7 @@ class Vault(abc.ABC):
 
     @classmethod
     @abc.abstractmethod
-    def from_options(cls, options: Mapping[str, str]) -> "Vault":
+    def from_options(cls, options: Mapping[str, str]) -> Vault:
         """Build the adapter from ``--vault-option KEY=VALUE`` settings.
 
         ``-p/--project`` and ``-c/--config`` arrive as ``project`` and ``config``. Raise
