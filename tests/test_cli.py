@@ -425,6 +425,28 @@ time.sleep(60)
     _, stderr = process.communicate(timeout=30)
     assert process.returncode == 0, stderr
     assert pi_secret(doppler)["piAuthJson"]["openai"]["access"] == "a9"
+    assert compact(home / PI_FILE) is None, "--remove-on-exit still removes the file"
+
+
+def test_ctrl_c_ends_the_command_and_the_file_is_still_written_back_and_removed(
+    avlt: Avlt, doppler: FakeDoppler, home: Path
+) -> None:
+    """Ctrl-C reaches every process in the terminal's foreground group: avlt outlives it,
+    the command does not."""
+    ready = home / "ready"
+    body = f"""
+save(H / {PI_FILE!r}, {{"openai": {{"access": "a8", "expires": 800}}}})
+open({str(ready)!r}, "w").write("1")
+time.sleep(60)
+"""
+    process = avlt.popen("run", "--preset", "pi", "--", *program(body), new_group=True)
+    assert wait_for(ready.exists)
+    os.killpg(process.pid, signal.SIGINT)  # as the terminal does
+    _, stderr = process.communicate(timeout=30)
+    assert process.returncode == 128 + signal.SIGINT, stderr
+    assert pi_secret(doppler)["piAuthJson"]["openai"]["access"] == "a8"
+    assert compact(home / PI_FILE) is None, "--remove-on-exit removes the file"
+    assert "pi: wrote newer credentials back to PI_AUTH_JSON" in stderr
 
 
 def test_a_wrapper_that_calls_avlt_again_is_stopped(avlt: Avlt) -> None:
