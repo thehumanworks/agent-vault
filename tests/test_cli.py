@@ -442,3 +442,40 @@ def test_unknown_options_and_presets(avlt: Avlt) -> None:
         "--lock-dir and --lock-file exclude each other"
         in avlt("--preset", "pi", "--lock-dir", "a", "--lock-file", "b", "pull").stderr
     )
+
+
+def test_a_preset_with_its_own_project_and_config(avlt: Avlt, doppler: FakeDoppler, home: Path) -> None:
+    """-p/-c given explicitly win over the preset's; everything else stays the preset's."""
+    doppler.put(
+        "team", "pi-shared", {"PI_AUTH_JSON": {"piAuthJson": {"openai": {"access": "t1", "expires": 100}}}}
+    )
+    out = home / "out"
+    body = f"""
+f = H / {PI_FILE!r}
+open({str(out)!r}, "w").write(load(f)["openai"]["access"])
+save(f, {{"openai": {{"access": "t2", "expires": 200}}}})
+"""
+    result = avlt("-p", "team", "-c", "pi-shared", "run", "--preset", "pi", "--", *program(body))
+    assert result.returncode == 0, result.stderr
+    assert out.read_text() == "t1", "pulled from team/pi-shared"
+    assert doppler.doc("team", "pi-shared", "PI_AUTH_JSON")["piAuthJson"]["openai"]["access"] == "t2"
+    assert doppler.get("agents", "pi", "PI_AUTH_JSON") is None, "agents/pi is not touched"
+    assert compact(home / PI_FILE) is None, "still removed on exit, as the preset says"
+
+
+def test_harness_form_with_its_own_project_and_config(
+    avlt: Avlt, doppler: FakeDoppler, home: Path, tmp_path: Path
+) -> None:
+    doppler.put(
+        "team", "pi-shared", {"PI_AUTH_JSON": {"piAuthJson": {"openai": {"access": "t1", "expires": 100}}}}
+    )
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    (bin_dir / "pi").write_text(f'#!/bin/sh\ncat "$HOME/{PI_FILE}" > {home}/seen\necho "$@" > {home}/args\n')
+    (bin_dir / "pi").chmod(0o755)
+    result = avlt(
+        "-p", "team", "-c", "pi-shared", "pi", "-p", "x", env={"PATH": f"{bin_dir}:{os.environ['PATH']}"}
+    )
+    assert result.returncode == 0, result.stderr
+    assert json.loads((home / "seen").read_text())["openai"]["access"] == "t1"
+    assert (home / "args").read_text() == "-p x\n", "options after the harness name are pi's"
