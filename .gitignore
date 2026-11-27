@@ -1,0 +1,13 @@
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+dist/
+build/
+*.egg-info/
+.venv/
+spec/tools/
+spec/states/
+spec/*.toolbox/
+spec/*_TTrace_*
