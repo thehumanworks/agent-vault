@@ -37,7 +37,7 @@ for check in "${checks[@]}"; do
   [[ $config == "${1:-}"* ]] || continue
   log=$(mktemp)
   start=$SECONDS
-  java -XX:+UseParallelGC -cp "$jar" tlc2.TLC -workers auto -deadlock -cleanup \
+  java -XX:+UseParallelGC -cp "$jar" tlc2.TLC -workers auto -deadlock -cleanup -noGenerateSpecTE \
     -config "$config.cfg" -metadir "states/$config" "$module.tla" >"$log" 2>&1 || true
   took=$((SECONDS - start))
   states=$(grep -oE '[0-9,]+ distinct states found' "$log" | tail -n 1 || true)
