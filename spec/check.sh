@@ -4,7 +4,7 @@
 # named property. Needs Java 11+; downloads tla2tools.jar (pinned, checked) on first use.
 #
 #   spec/check.sh            every configuration but the deep ones
-#   spec/check.sh --deep     every configuration (AgentVaultSyncDeep: about 12 minutes on 4 cores)
+#   spec/check.sh --deep     every configuration (the deep ones: about 50 minutes on 4 cores)
 #   spec/check.sh LockSteal  only those whose name starts with LockSteal
 set -euo pipefail
 cd "$(dirname "$0")"
@@ -33,10 +33,12 @@ checks=(
   "AgentVaultSync       MCAgentVaultSync  ok"
   "AgentVaultSyncLogout MCAgentVaultSync  ok"
   "AgentVaultSyncDeep   MCAgentVaultSync  ok  deep"
+  "AgentVaultSyncLogoutDeep MCAgentVaultSync ok deep"
   "DopplerNixBlindWrites MCAgentVaultSync NoLostRefresh|SafeRemoval|Converged"
   "DopplerNixOldBase    MCAgentVaultSync  NoResurrection"
   "DopplerNixBasePerRun MCAgentVaultSync  NoResurrection"
-  "DopplerNix           MCAgentVaultSync  NoLostRefresh|SafeRemoval|Converged|NoResurrection"
+  "DopplerNixPullPerRun MCAgentVaultSync  NoLostLocalChange"
+  "DopplerNix           MCAgentVaultSync  NoLostRefresh|SafeRemoval|Converged|NoResurrection|NoLostLocalChange"
 )
 
 failed=0
