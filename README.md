@@ -101,6 +101,14 @@ avlt [OPTIONS] pull|push [OPTIONS]
 | `pi` | `agents/pi`, `PI_AUTH_JSON`, `${PI_CODING_AGENT_DIR:-~/.pi/agent}/auth.json`, envelope `piAuthJson`, per provider by `expires`, removed on exit. Log in with `pi auth login <provider>`: pi takes `pi login …` as a prompt. |
 | `codex` | `agents/codex`, `CODEX_AUTH_JSON`, `${CODEX_HOME:-~/.codex}/auth.json`, envelope `codexAuthJson`, the whole file by `last_refresh`, flock `auth.lock`. |
 
+Options given with a preset win over its settings. They go before the tool's name, since
+everything after it is passed to the tool:
+
+```sh
+avlt -p team -c pi-shared pi            # pi's preset, synced through team/pi-shared
+avlt -f ~/work/codex/auth.json codex    # codex's preset, another file
+```
+
 `avlt run -p PROJECT -c CONFIG -- COMMAND` without `--secret`, `--file` and `--envelope`
 only passes the config's secrets to the command, like `doppler run`.
 

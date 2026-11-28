@@ -82,7 +82,9 @@ class Avlt:
             raise AssertionError(f"avlt {args} failed: {result.stderr}")
         return result
 
-    def popen(self, *args: str, env: Optional[Dict[str, str]] = None) -> subprocess.Popen:
+    def popen(
+        self, *args: str, env: Optional[Dict[str, str]] = None, new_group: bool = False
+    ) -> subprocess.Popen:
         full_env = dict(self.env)
         full_env.update(env or {})
         return subprocess.Popen(
@@ -92,6 +94,7 @@ class Avlt:
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
+            start_new_session=new_group,
         )
 
 

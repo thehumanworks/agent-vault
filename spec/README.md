@@ -26,25 +26,45 @@ Python code itself, in random interleavings (`tests/test_concurrency.py`).
 `LockSteal` checks **MutualExclusion**: no two live processes hold the tool's lock at once,
 even while lock directories left by dead processes are being removed.
 
-The model of `AgentVaultSync.cfg`: two machines, two runs on the first and one on the
-second, all able to start, sync and exit in any order; one credential with a time key and
-one without; programs that refresh, change and (in `AgentVaultSyncLogout.cfg`) remove
-credentials while their run syncs; people who edit the secret by hand; a vault read or
-write that fails; compare-and-set conflicts and retries; and the removal of the file by
-the last run on a machine.
+The model: two machines, two runs on the first and one on the second, all able to start,
+sync and exit in any order; one credential with a time key and one without; programs that
+refresh, change and (in the `Logout` configurations) remove credentials while their run
+syncs; people who edit the secret by hand; a vault read or write that fails;
+compare-and-set conflicts and retries; and the removal of the file by the last run on a
+machine. `MaxValue` bounds how many new credential values programs and people make.
+
+Results with TLC 1.7.4, 4 cores (`spec/check.sh --deep`):
+
+| Configuration | New values | Result | Distinct states | Time |
+| --- | --- | --- | --- | --- |
+| `AgentVaultSync` (CI) | 3 | holds | 5,175,599 | 71 s |
+| `AgentVaultSyncDeep` | 4 | holds | 47,309,804 | 12 min |
+| `AgentVaultSyncLogout` (CI) | 2 | holds | 9,749,341 | 2.5 min |
+| `AgentVaultSyncLogoutDeep` | 3 | holds | 115,822,663 | 37 min |
+| `LockSteal` | | holds | 70 | 1 s |
+
+CI runs every configuration except the two deep ones.
 
 ## What TLC finds in doppler-nix
 
 Each flag of the spec switches on one behaviour of doppler-nix. With it, TLC finds a
-counterexample, and so does the Python harness when the same behaviour is put back into
-the code (`test_mutation_*`):
+counterexample in about a second, and so does the Python harness when the same behaviour
+is put back into the code (`test_mutation_*`). Each configuration checks only the property
+of its story; with all of them checked, TLC reports the first violation it reaches, which
+can be another one (`DopplerNix`, all flags off, does that):
 
 | Configuration | doppler-nix's behaviour | Property violated | The race |
 | --- | --- | --- | --- |
 | `DopplerNixBlindWrites` | `doppler secrets set` writes whatever it merged | NoLostRefresh / SafeRemoval / Converged | Machine B reads the secret, machine A writes a refreshed token and removes its file, B writes its older copy over it. The provider has already rotated the token, so every machine must log in again. |
 | `DopplerNixOldBase` | after a failed write the old base stays | NoResurrection | The merge pulls a newer API key from the vault into the file, the write fails, and at the next try that key counts as a local change and overwrites a later edit made in the vault. |
 | `DopplerNixBasePerRun` | each run keeps its own base | NoResurrection | Run 1 and run 2 share a file. Run 1 syncs key X; someone edits it to Y in Doppler; run 2, which has not synced since, sees X as its own change and writes it back over Y. |
+| `DopplerNixPullPerRun` | each run keeps its own base | NoLostLocalChange | Run 1's program changes an API key. Run 2 starts on the same machine before run 1 has synced it; run 2's pull has no base, so the vault's copy wins and the new key is gone. |
 | `LockStealNaive` | the stale lock check and its `rmdir` are two steps | MutualExclusion | Two runs find pi's abandoned lock stale; the first removes it and takes a fresh one; the second's `rmdir` removes that fresh lock, and both hold the lock. |
+
+With every invariant checked, TLC also finds that blind writes can put back an API key
+that was edited in Doppler since (NoResurrection), and that doppler-nix's rule "after a
+pull, the pulled file is the base", combined with a shared base, marks a key that never
+reached the vault as synced (NoLostLocalChange).
 
 agent-vault removes each: guarded writes (compare-and-set, retried on conflict), the
 rebase rule (`merge.rebase`), one base per machine under a sync mutex (`MachineState`),
@@ -81,8 +101,8 @@ condition agent-vault cannot enforce; none is hidden in the model.
   the mutexes are flocks, which the kernel releases when their holder dies. Linux drops a
   shared flock before it tries to make it exclusive; the model does the same.
 
-Bounded model checking explores every behaviour up to the bounds in the `.cfg` files (a
-few new credential values, one failure, two attempts). The protocol does not count or
+Bounded model checking explores every behaviour up to the bounds in the `.cfg` files (two
+to four new credential values, one failure, two compare-and-set attempts). The protocol does not count or
 compare these bounds, so a counterexample would need a longer behaviour of the same
 shape; the random tests run longer schedules on the real code.
 
@@ -110,7 +130,8 @@ one flock call (F1).
 ## Running the checks
 
 ```sh
-spec/check.sh                  # every configuration; downloads tla2tools.jar 1.8.0 (checked)
+spec/check.sh                  # every configuration but the deep ones; downloads TLC 1.7.4 (checked)
+spec/check.sh --deep           # all of them (about 50 minutes on 4 cores)
 spec/check.sh LockSteal        # only those whose name starts with LockSteal
 ```
 
